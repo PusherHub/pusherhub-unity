@@ -21,14 +21,15 @@
 // in Assets/ — see the SDK Integration tab in the PusherHub dashboard.
 //
 // This whole SDK is one file (this one) — drop it anywhere under Assets/,
-// e.g. Assets/PusherHub/PusherHub.cs. It needs nothing else: notifications
-// shown while the game is open use Android's own APIs, and in-app messages
-// are drawn with Unity UI. It also patches the generated Android manifest at
-// build time (see PusherHubAndroidManifestPatcher at the bottom), so there's
-// no manifest to edit by hand.
+// e.g. Assets/PusherHub/PusherHub.cs. It needs nothing else: on Android,
+// notifications shown while the game is open use Android's own APIs, and
+// in-app messages are drawn with Unity UI.
 //
-// Android only for now. The file compiles for iOS builds, but iOS hasn't
-// been tested yet.
+// Works on Android and iOS. Neither needs editing by hand: at build time it
+// patches the generated Android manifest (PusherHubAndroidManifestPatcher)
+// and the generated Xcode project — Push Notifications capability,
+// background notifications and notification pictures
+// (PusherHubXcodeProjectPatcher) — both at the bottom of this file.
 //
 // It runs alongside another push SDK such as OneSignal: PusherHub leaves that
 // SDK's pushes to it.
