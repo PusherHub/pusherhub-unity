@@ -95,6 +95,16 @@ namespace PusherHubSDK
         internal const string ExtraNotificationId = "pushhub_notification_id";
         internal const string ExtraDeepLink = "pushhub_deep_link";
         internal const string ExtraTapId = "pushhub_tap_id";
+        internal const string ExtraCustomData = "pushhub_custom_data";
+
+        // What PusherHub itself puts in a push's data next to the Custom Data —
+        // left out of what onNotificationOpened gets — and what Firebase and
+        // iOS add next to it.
+        static readonly HashSet<string> NotCustomData = new HashSet<string>
+        {
+            "notification_id", "click_action", "deep_link", "aps", "fcm_options", "from", "collapse_key", "message_type",
+            ExtraNotificationId, ExtraDeepLink, ExtraTapId,
+        };
 
         // Matches the window the backend's Realtime tab buckets by. Anything
         // faster just upserts the same minute row for no extra information.
@@ -104,6 +114,7 @@ namespace PusherHubSDK
         static string publicKey;
         static string baseUrl;
         static Action<string> onNotificationClick;
+        static Action<Dictionary<string, string>> onNotificationOpened;
         static bool initialized;
         static bool firebaseReady;
         static PusherHubRunner runner;
@@ -186,7 +197,15 @@ namespace PusherHubSDK
         /// (Application.OpenURL) when a tapped notification or in-app message
         /// carries a deep link.
         /// </param>
-        public static void Initialize(string appKey, string publicKey, string baseUrl, Action<string> onNotificationClick = null)
+        /// <param name="onNotificationOpened">
+        /// Optional — called on every tap of a PusherHub notification, whether
+        /// the game was open, in the background or closed, with the Custom
+        /// Data it was sent with (empty if it had none). Open the right screen
+        /// from it, e.g. data["campaign_id"]. Values arrive as text —
+        /// {"campaign_id": 232} gives "232" — and a nested object or list as
+        /// its JSON.
+        /// </param>
+        public static void Initialize(string appKey, string publicKey, string baseUrl, Action<string> onNotificationClick = null, Action<Dictionary<string, string>> onNotificationOpened = null)
         {
             if (initialized)
             {
@@ -198,6 +217,7 @@ namespace PusherHubSDK
             PusherHub.publicKey = publicKey;
             PusherHub.baseUrl = (baseUrl ?? "").TrimEnd('/');
             PusherHub.onNotificationClick = onNotificationClick;
+            PusherHub.onNotificationOpened = onNotificationOpened;
             initialized = true;
 
             var host = new GameObject("PusherHub");
@@ -701,7 +721,7 @@ namespace PusherHubSDK
             if (message.NotificationOpened)
             {
 #if UNITY_IOS && !UNITY_EDITOR
-                if (notificationId != null) NotificationOpened(notificationId, deepLink);
+                if (notificationId != null) NotificationOpened(notificationId, deepLink, CustomData(data));
 #endif
                 // On Android, taps are read from the Activity's Intent instead
                 // (HandleNotificationTap) — Firebase only reports them when the
@@ -725,7 +745,7 @@ namespace PusherHubSDK
             // Only reaches here while the game is in the foreground — for a
             // backgrounded or killed game, Android shows the push's
             // notification block itself and this never fires.
-            PusherHubAndroid.ShowNotification(title, body, notificationId, deepLink);
+            PusherHubAndroid.ShowNotification(title, body, notificationId, deepLink, CustomData(data));
 #endif
         }
 
@@ -738,23 +758,38 @@ namespace PusherHubSDK
         static void HandleNotificationTap()
         {
 #if UNITY_ANDROID && !UNITY_EDITOR
-            if (!PusherHubAndroid.TakeNotificationTap(out var notificationId, out var deepLink, out var tapId)) return;
+            if (!PusherHubAndroid.TakeNotificationTap(out var notificationId, out var deepLink, out var tapId, out var data)) return;
             if (tapId != null)
             {
                 if (tapId == PlayerPrefs.GetString(LastHandledTapKey, "")) return;
                 PlayerPrefs.SetString(LastHandledTapKey, tapId);
                 PlayerPrefs.Save();
             }
-            NotificationOpened(notificationId, deepLink);
+            NotificationOpened(notificationId, deepLink, data);
 #endif
         }
 
-        static void NotificationOpened(string notificationId, string deepLink)
+        static void NotificationOpened(string notificationId, string deepLink, Dictionary<string, string> data)
         {
             Log("Notification opened: " + notificationId);
             TrackOpen(notificationId, deepLink);
+            onNotificationOpened?.Invoke(data);
             if (deepLink != null) OpenDeepLink(deepLink);
         }
+
+        /// <summary>A push's Custom Data: its data without PusherHub's, Firebase's and iOS's own keys.</summary>
+        internal static Dictionary<string, string> CustomData(IDictionary<string, string> data)
+        {
+            var custom = new Dictionary<string, string>();
+            foreach (var entry in data)
+            {
+                if (IsCustomDataKey(entry.Key) && entry.Value != null) custom[entry.Key] = entry.Value;
+            }
+            return custom;
+        }
+
+        internal static bool IsCustomDataKey(string key) =>
+            !NotCustomData.Contains(key) && !key.StartsWith("gcm.", StringComparison.Ordinal) && !key.StartsWith("google.", StringComparison.Ordinal);
 
         static void TrackOpen(string notificationId, string deepLink)
         {
@@ -1116,14 +1151,16 @@ namespace PusherHubSDK
 
         /// <summary>
         /// Reads (and clears, so a later resume can't report it again) the
-        /// PusherHub notification tap on the Activity's current Intent. The
-        /// prefixed extras are on taps of notifications this SDK posted while
-        /// the game was open; for a backgrounded/killed game, Android builds
-        /// the tap Intent itself from the push, carrying its raw data keys.
+        /// PusherHub notification tap on the Activity's current Intent, with
+        /// its Custom Data. The prefixed extras are on taps of notifications
+        /// this SDK posted while the game was open; for a backgrounded/killed
+        /// game, Android builds the tap Intent itself from the push, carrying
+        /// its raw data keys.
         /// </summary>
-        internal static bool TakeNotificationTap(out string notificationId, out string deepLink, out string tapId)
+        internal static bool TakeNotificationTap(out string notificationId, out string deepLink, out string tapId, out Dictionary<string, string> data)
         {
             notificationId = deepLink = tapId = null;
+            data = new Dictionary<string, string>();
             try
             {
                 using (var activity = CurrentActivity())
@@ -1141,7 +1178,14 @@ namespace PusherHubSDK
                         tapId = PusherHub.NullIfEmpty(intent.Call<string>("getStringExtra", PusherHub.ExtraTapId))
                             ?? PusherHub.NullIfEmpty(intent.Call<string>("getStringExtra", "google.message_id"));
 
-                        foreach (var key in new[] { PusherHub.ExtraNotificationId, "notification_id", PusherHub.ExtraDeepLink, "deep_link", PusherHub.ExtraTapId })
+                        // The bundle on this SDK's own notification, or the push's data keys Android put on its tap.
+                        using (var custom = intent.Call<AndroidJavaObject>("getBundleExtra", PusherHub.ExtraCustomData))
+                        using (var extras = custom ?? intent.Call<AndroidJavaObject>("getExtras"))
+                        {
+                            if (extras != null) ReadStrings(extras, data);
+                        }
+
+                        foreach (var key in new[] { PusherHub.ExtraNotificationId, "notification_id", PusherHub.ExtraDeepLink, "deep_link", PusherHub.ExtraTapId, PusherHub.ExtraCustomData })
                         {
                             intent.Call("removeExtra", key);
                         }
@@ -1156,6 +1200,23 @@ namespace PusherHubSDK
             }
         }
 
+        /// <summary>The text values of an Android Bundle that are Custom Data.</summary>
+        static void ReadStrings(AndroidJavaObject bundle, Dictionary<string, string> into)
+        {
+            using (var keys = bundle.Call<AndroidJavaObject>("keySet"))
+            using (var iterator = keys.Call<AndroidJavaObject>("iterator"))
+            {
+                while (iterator.Call<bool>("hasNext"))
+                {
+                    string key;
+                    using (var next = iterator.Call<AndroidJavaObject>("next")) key = next.Call<string>("toString");
+                    if (!PusherHub.IsCustomDataKey(key)) continue;
+                    var value = bundle.Call<string>("getString", key);
+                    if (value != null) into[key] = value;
+                }
+            }
+        }
+
         /// <summary>
         /// Posts a system notification for a push that arrived while the game
         /// was open, with a tap that comes back through TakeNotificationTap.
@@ -1163,7 +1224,7 @@ namespace PusherHubSDK
         /// SDK passes on — pushes that arrive in the background (the usual
         /// case) do show their image, because Android draws those itself.
         /// </summary>
-        internal static void ShowNotification(string title, string body, string notificationId, string deepLink)
+        internal static void ShowNotification(string title, string body, string notificationId, string deepLink, Dictionary<string, string> customData)
         {
             // Required on Android 13+ — posting without it does nothing.
             if (SdkInt >= 33 && !Permission.HasUserAuthorizedPermission(PostNotifications)) return;
@@ -1188,6 +1249,13 @@ namespace PusherHubSDK
                         if (notificationId != null) intent.Call<AndroidJavaObject>("putExtra", PusherHub.ExtraNotificationId, notificationId).Dispose();
                         intent.Call<AndroidJavaObject>("putExtra", PusherHub.ExtraTapId, tapId).Dispose();
                         if (deepLink != null) intent.Call<AndroidJavaObject>("putExtra", PusherHub.ExtraDeepLink, deepLink).Dispose();
+                        // The Custom Data, for onNotificationOpened — a notification Android
+                        // shows itself carries the push's data keys on its tap already.
+                        using (var bundle = new AndroidJavaObject("android.os.Bundle"))
+                        {
+                            foreach (var entry in customData) bundle.Call("putString", entry.Key, entry.Value);
+                            intent.Call<AndroidJavaObject>("putExtra", PusherHub.ExtraCustomData, bundle).Dispose();
+                        }
 
                         using (var pendingIntentClass = new AndroidJavaClass("android.app.PendingIntent"))
                         using (var pendingIntent = pendingIntentClass.CallStatic<AndroidJavaObject>("getActivity", context, requestCode, intent, PendingIntentFlagUpdateCurrent | PendingIntentFlagImmutable))

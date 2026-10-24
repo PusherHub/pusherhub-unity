@@ -9,6 +9,7 @@ Push notifications and in-app messages for your Unity game on **Android and iOS*
 - Registers each phone with PusherHub and keeps its FCM token up to date
 - Links a phone to your player id with `Login()` — remembered across restarts until `Logout()`
 - Reports notification opens and clicks; a tapped notification opens its deep link (or your own handler)
+- Hands your game each tapped notification's Custom Data, so you can open the right screen
 - Shows in-app messages (banner, modal, full screen, center popup, bottom sheet) with Unity UI, on top of your game
 - Sets up the Android manifest and the Xcode project for you during the build — nothing to edit by hand
 
@@ -61,6 +62,26 @@ public static class PusherHubSetup
 ```
 
 To handle a tapped notification's deep link inside your game instead of opening it, pass `onNotificationClick: link => { ... }` to `Initialize()`.
+
+## Opening a screen when a notification is tapped
+
+Put your own data in **Custom Data** when you create a notification — say `{"campaign_id": "232"}` — and get it back on every tap, whether the game was open, in the background or closed.
+
+```csharp
+PusherHub.Initialize(
+    appKey: "YOUR_APP_KEY",
+    publicKey: "YOUR_PUBLIC_KEY",
+    baseUrl: "https://pusherhub.com/api",
+    onNotificationOpened: data =>
+    {
+        if (data.TryGetValue("campaign_id", out var campaignId))
+        {
+            CampaignScreen.Open(campaignId); // your own code
+        }
+    });
+```
+
+Every value arrives as text (`"232"`).
 
 ## Signed-in players
 
