@@ -1,6 +1,6 @@
-# PusherHub Unity SDK
+# PusherHub Unity SDK — push notifications for Android and iOS games
 
-Push notifications and in-app messages for your Unity game on **Android and iOS**, sent through your own Firebase project with [PusherHub](https://pusherhub.com).
+Push notifications and in-app messages for your Unity game on **Android and iOS**: a free push notification service that sends through your own Firebase project — Firebase Cloud Messaging (FCM) for Android and the Apple Push Notification service (APNs) for iPhones — with [PusherHub](https://pusherhub.com).
 
 [Website](https://pusherhub.com) · [Guides](https://pusherhub.com/docs) · [Pricing](https://pusherhub.com/pricing)
 
